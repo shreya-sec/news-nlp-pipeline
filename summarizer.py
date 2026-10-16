@@ -1,31 +1,33 @@
 import warnings
-from transformers import pipeline
+from transformers import AutoTokenizer, AutoModelForSeq2SeqLM
 
-# Suppress Hugging Face's benign length-constraint warnings
-warnings.filterwarnings("ignore", message="Your max_length is set.*")
+# Suppress benign tokenization warnings
+warnings.filterwarnings("ignore")
 
-# Initialize the BART summarization model once globally
 MODEL_NAME = "facebook/bart-large-cnn"
 print("Loading BART Summarization model...")
 
+tokenizer = None
+model = None
+
 try:
-    summarizer_pipeline = pipeline("summarization", model=MODEL_NAME)
+    tokenizer = AutoTokenizer.from_pretrained(MODEL_NAME)
+    model = AutoModelForSeq2SeqLM.from_pretrained(MODEL_NAME)
 except Exception as e:
     print(f"Initial model loading failed: {e}")
-    summarizer_pipeline = None
 
 
 def generate_summary(text: str, max_tokens: int = 130, min_tokens: int = 35) -> str:
-    """Generate an abstractive summary using the BART-CNN model."""
+    """Generate an abstractive summary using BART Seq2Seq directly."""
+    global tokenizer, model
 
-    if not isinstance(text, str) or len(text.strip().split()) < 30:
+    if not isinstance(text, str) or len(text.strip().split()) < 25:
         return "Article is too short to generate a meaningful summary."
 
     try:
-        global summarizer_pipeline
-
-        if summarizer_pipeline is None:
-            summarizer_pipeline = pipeline("summarization", model=MODEL_NAME)
+        if tokenizer is None or model is None:
+            tokenizer = AutoTokenizer.from_pretrained(MODEL_NAME)
+            model = AutoModelForSeq2SeqLM.from_pretrained(MODEL_NAME)
 
         max_tokens = int(max_tokens)
         min_tokens = int(min_tokens)
@@ -33,18 +35,27 @@ def generate_summary(text: str, max_tokens: int = 130, min_tokens: int = 35) -> 
         if max_tokens < 20 or min_tokens < 1 or min_tokens >= max_tokens:
             return "Invalid summary length parameters."
 
-        # Limit input to 3500 characters as required by the project
+        # Truncate text to 3500 chars to comfortably fit inside the 1024 token limit
         cleaned_input = text.strip()[:3500]
 
-        summary_result = summarizer_pipeline(
-            cleaned_input,
-            max_length=max_tokens,
-            min_length=min_tokens,
-            do_sample=False,
-            truncation=True
+        inputs = tokenizer(
+            [cleaned_input],
+            max_length=1024,
+            truncation=True,
+            return_tensors="pt"
         )
 
-        return summary_result[0]["summary_text"].strip()
+        summary_ids = model.generate(
+            inputs["input_ids"],
+            num_beams=4,
+            max_length=max_tokens,
+            min_length=min_tokens,
+            no_repeat_ngram_size=3,
+            early_stopping=True
+        )
+
+        summary_text = tokenizer.decode(summary_ids[0], skip_special_tokens=True)
+        return summary_text.strip()
 
     except Exception as e:
         return f"Error during summarization: {str(e)}"
@@ -63,5 +74,5 @@ if __name__ == "__main__":
         "AI chips to increase as businesses expand their AI services."
     )
 
-    print("Testing summarizer.py locally...")
+    print("Testing updated summarizer.py locally...")
     print("Summary:", generate_summary(test_text))
